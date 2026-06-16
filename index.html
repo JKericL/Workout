@@ -496,6 +496,11 @@
     </div>
 
     <script>
+        // window.onload 함수 맨 윗부분에 추가
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js')
+        .then(() => console.log('Service Worker Registered'));
+}
         let exercises = JSON.parse(localStorage.getItem('ex_list')) || [
             { id: 1, name: '바벨 스쿼트', rest: 90, weight: 60 },
             { id: 2, name: '벤치 프레스', rest: 60, weight: 40 },
