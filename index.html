@@ -431,6 +431,41 @@
             .nav-item i {
                 font-size: 20px;
             }
+
+
+        /* 캘린더 월 이동 버튼 */
+        .calendar-header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 0;
+            margin-bottom: 8px;
+        }
+
+        .calendar-header h3 {
+            margin: 0;
+            min-width: 130px;
+            text-align: center;
+            font-size: 16px;
+        }
+
+        .cal-nav-btn {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-main);
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .cal-nav-btn:active {
+            background: var(--primary);
+            color: #000;
+        }
     </style>
 </head>
 <body>
@@ -483,7 +518,11 @@
         </div>
 
         <div id="tab-history" class="tab-panel">
-            <h3 style="margin-top:0; text-align: center; font-size: 16px;" id="calMonthTitle">2026년 06월</h3>
+            <div class="calendar-header">
+                <button class="cal-nav-btn" onclick="changeCalendarMonth(-1)" aria-label="이전 달">‹</button>
+                <h3 id="calMonthTitle">2026년 06월</h3>
+                <button class="cal-nav-btn" onclick="changeCalendarMonth(1)" aria-label="다음 달">›</button>
+            </div>
             <div class="calendar-grid" id="calendarGrid"></div>
             <div class="history-log" id="historyLog">
                 <p style="color: var(--text-sub); text-align: center; font-size: 13px;">날짜를 선택하면 상세 기록이 표시됩니다.</p>
@@ -521,13 +560,15 @@ if ('serviceWorker' in navigator) {
 
         let sessionInterval = null;
         let restInterval = null;
-        let restEndTime = 0; // [변경됨] 휴식 종료 시간(절대 시간) 저장 변수
+        let restEndTime = 0; // 휴식 종료 시간(절대 시간) 저장 변수
+        let calendarViewDate = new Date(); // 캘린더에서 현재 보고 있는 월
 
         const getTodayStr = () => new Date().toISOString().split('T')[0];
 
         window.onload = function () {
             dataMigration();
             restoreSessionState();
+            restoreRestTimerState();
             renderTracker();
             updateTodaySelectOptions();
             renderManageList();
@@ -572,6 +613,19 @@ if ('serviceWorker' in navigator) {
             if (tabId === 'tracker') updateTodaySelectOptions();
         }
 
+        function updateSessionClock(startTime) {
+            const elapsed = Date.now() - startTime;
+            document.getElementById('sessionClock').innerText = formatTime(elapsed);
+        }
+
+        function startSessionClock(startTime) {
+            clearInterval(sessionInterval);
+            updateSessionClock(startTime);
+            sessionInterval = setInterval(() => {
+                updateSessionClock(startTime);
+            }, 1000);
+        }
+
         function restoreSessionState() {
             const savedStart = localStorage.getItem('session_start_time');
             if (savedStart) {
@@ -582,10 +636,7 @@ if ('serviceWorker' in navigator) {
                 btn.classList.add('active');
 
                 const startTime = parseInt(savedStart);
-                sessionInterval = setInterval(() => {
-                    const elapsed = Date.now() - startTime;
-                    document.getElementById('sessionClock').innerText = formatTime(elapsed);
-                }, 1000);
+                startSessionClock(startTime);
             }
         }
 
@@ -601,13 +652,11 @@ if ('serviceWorker' in navigator) {
                 btn.innerText = "종료";
                 btn.classList.add('active');
 
-                sessionInterval = setInterval(() => {
-                    const elapsed = Date.now() - startTime;
-                    document.getElementById('sessionClock').innerText = formatTime(elapsed);
-                }, 1000);
+                startSessionClock(startTime);
             } else {
                 if (confirm("오늘의 운동을 마감하고 기록을 저장할까요?")) {
                     clearInterval(sessionInterval);
+                    stopRestTimer(false);
                     const elapsedSec = Math.floor((Date.now() - parseInt(savedStart)) / 1000);
 
                     saveSessionToHistory(elapsedSec);
@@ -736,30 +785,77 @@ if ('serviceWorker' in navigator) {
             startRestTimer(name, restTime);
         }
 
-        // [변경됨] 0.5초마다 시간 차를 재계산하는 타이머 로직
+        function stopRestTimer(shouldBeep) {
+            clearInterval(restInterval);
+            restInterval = null;
+            restEndTime = 0;
+            localStorage.removeItem('rest_timer_state');
+            document.getElementById('restTimerOverlay').style.display = 'none';
+            if (shouldBeep) triggerBeep();
+        }
+
+        function updateRestTimerDisplay(shouldBeepOnFinish = true) {
+            if (!restEndTime) return;
+
+            const diff = restEndTime - Date.now();
+            const overlay = document.getElementById('restTimerOverlay');
+
+            if (diff <= 0) {
+                stopRestTimer(shouldBeepOnFinish);
+                return;
+            }
+
+            overlay.style.display = 'flex';
+            let m = Math.floor(diff / 60000);
+            let s = Math.floor((diff % 60000) / 1000);
+            document.getElementById('restClock').innerText = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+
+        function runRestTimerInterval() {
+            clearInterval(restInterval);
+            updateRestTimerDisplay(false);
+            restInterval = setInterval(() => {
+                updateRestTimerDisplay(true);
+            }, 500);
+        }
+
         function startRestTimer(exName, duration) {
             restEndTime = Date.now() + (duration * 1000);
 
-            const overlay = document.getElementById('restTimerOverlay');
+            localStorage.setItem('rest_timer_state', JSON.stringify({
+                exName: exName,
+                endTime: restEndTime
+            }));
+
             document.getElementById('restExName').innerText = exName;
-            overlay.style.display = 'flex';
+            document.getElementById('restTimerOverlay').style.display = 'flex';
+            runRestTimerInterval();
+        }
 
-            clearInterval(restInterval);
+        function restoreRestTimerState() {
+            const savedRestTimer = localStorage.getItem('rest_timer_state');
+            if (!savedRestTimer) return;
 
-            restInterval = setInterval(() => {
-                const now = Date.now();
-                const diff = restEndTime - now;
-
-                if (diff <= 0) {
-                    clearInterval(restInterval);
-                    overlay.style.display = 'none';
-                    triggerBeep();
-                } else {
-                    let m = Math.floor(diff / 60000);
-                    let s = Math.floor((diff % 60000) / 1000);
-                    document.getElementById('restClock').innerText = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+            try {
+                const parsed = JSON.parse(savedRestTimer);
+                if (!parsed || !parsed.endTime) {
+                    localStorage.removeItem('rest_timer_state');
+                    return;
                 }
-            }, 500);
+
+                if (parsed.endTime <= Date.now()) {
+                    localStorage.removeItem('rest_timer_state');
+                    document.getElementById('restTimerOverlay').style.display = 'none';
+                    return;
+                }
+
+                restEndTime = parsed.endTime;
+                document.getElementById('restExName').innerText = parsed.exName || '-';
+                document.getElementById('restTimerOverlay').style.display = 'flex';
+                runRestTimerInterval();
+            } catch (e) {
+                localStorage.removeItem('rest_timer_state');
+            }
         }
 
         function triggerBeep() {
@@ -858,13 +954,20 @@ if ('serviceWorker' in navigator) {
             alert(`🎉 ${dateStr}의 루틴을 오늘 루틴으로 그대로 가져왔습니다!`);
         }
 
+        function changeCalendarMonth(offset) {
+            calendarViewDate.setMonth(calendarViewDate.getMonth() + offset);
+            renderCalendar();
+            document.getElementById('historyLog').innerHTML = `<p style="color: var(--text-sub); text-align: center; font-size: 13px;">날짜를 선택하면 상세 기록이 표시됩니다.</p>`;
+        }
+
         function renderCalendar() {
             const grid = document.getElementById('calendarGrid');
             grid.innerHTML = '';
             const days = ['일', '월', '화', '수', '목', '금', '토'];
             days.forEach(d => grid.innerHTML += `<div class="cal-day-label">${d}</div>`);
 
-            const now = new Date(); const year = now.getFullYear(); const month = now.getMonth();
+            const year = calendarViewDate.getFullYear();
+            const month = calendarViewDate.getMonth();
             document.getElementById('calMonthTitle').innerText = `${year}년 ${String(month + 1).padStart(2, '0')}월`;
 
             const firstDay = new Date(year, month, 1).getDay();
@@ -921,6 +1024,21 @@ if ('serviceWorker' in navigator) {
     </script>
 
     <script>
+        function syncTimersAfterResume() {
+            const savedStart = localStorage.getItem('session_start_time');
+            if (savedStart) updateSessionClock(parseInt(savedStart));
+
+            const savedRestTimer = localStorage.getItem('rest_timer_state');
+            if (savedRestTimer && !restEndTime) restoreRestTimerState();
+            updateRestTimerDisplay(true);
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) syncTimersAfterResume();
+        });
+
+        window.addEventListener('pageshow', syncTimersAfterResume);
+
         function exportBackup() {
             const backup = {
                 exercises: JSON.parse(localStorage.getItem('ex_list')) || [],
