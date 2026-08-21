@@ -155,6 +155,26 @@
             border-radius: 10px;
         }
 
+        .rest-edit-badge {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
+        }
+
+            .rest-edit-badge input {
+                width: 54px;
+                background: var(--bg-dark);
+                border: 1px solid rgba(0,229,255,0.35);
+                color: var(--primary);
+                text-align: center;
+                padding: 3px 4px;
+                border-radius: 7px;
+                font-size: 12px;
+                font-weight: bold;
+                font-variant-numeric: tabular-nums;
+            }
+
         .btn-card-remove {
             position: absolute;
             top: 18px;
@@ -722,6 +742,7 @@ if ('serviceWorker' in navigator) {
 
                 const defaultMasterWeight = ex.weight !== undefined ? ex.weight : '0';
                 const lastSet = todaySets[todaySets.length - 1] || { weight: defaultMasterWeight, reps: '' };
+                const restValue = Number.isFinite(parseInt(ex.rest, 10)) ? parseInt(ex.rest, 10) : 60;
 
                 const chipsHtml = todaySets.map((s, idx) => `
                             <span class="set-chip">${idx + 1}S: ${s.weight}kg × ${s.reps}회</span>
@@ -732,7 +753,12 @@ if ('serviceWorker' in navigator) {
                                 <button class="btn-card-remove" onclick="removeExerciseFromToday(${ex.id})"><i class="fa-solid fa-xmark"></i></button>
                                 <div class="card-header">
                                     <div class="card-title">${ex.name}</div>
-                                    <div class="timer-badge"><i class="fa-solid fa-clock"></i> 휴식 ${ex.rest}초</div>
+                                    <div class="timer-badge rest-edit-badge">
+                                        <i class="fa-solid fa-clock"></i>
+                                        <span>휴식</span>
+                                        <input type="number" pattern="[0-9]*" inputmode="numeric" min="0" step="5" id="rest-${ex.id}" value="${restValue}" onchange="updateExerciseRestFromTracker(${ex.id}, this.value)">
+                                        <span>초</span>
+                                    </div>
                                 </div>
 
                                 <div class="completed-sets-viewer">
@@ -749,11 +775,39 @@ if ('serviceWorker' in navigator) {
                                         <input type="number" pattern="[0-9]*" inputmode="numeric" id="r-${ex.id}" value="${lastSet.reps}" placeholder="0">
                                         <span>회</span>
                                     </div>
-                                    <button class="btn-complete" onclick="completeSetWithVolume('${ex.name}', ${ex.id}, ${ex.rest})">완료</button>
+                                    <button class="btn-complete" onclick="completeSetWithVolume('${ex.name}', ${ex.id}, getRestTimeFromTracker(${ex.id}))">완료</button>
                                 </div>
                             </div>
                         `;
             }).join('');
+        }
+
+        function getRestTimeFromTracker(id) {
+            const input = document.getElementById(`rest-${id}`);
+            const typedValue = input ? parseInt(input.value, 10) : NaN;
+            if (Number.isFinite(typedValue) && typedValue >= 0) return typedValue;
+
+            const matchedExercise = exercises.find(ex => ex.id === id);
+            const savedValue = matchedExercise ? parseInt(matchedExercise.rest, 10) : NaN;
+            return Number.isFinite(savedValue) && savedValue >= 0 ? savedValue : 60;
+        }
+
+        function updateExerciseRestFromTracker(id, value) {
+            const rest = parseInt(value, 10);
+            const matchedExercise = exercises.find(ex => ex.id === id);
+
+            if (!matchedExercise) return;
+
+            if (!Number.isFinite(rest) || rest < 0) {
+                alert("휴식 시간은 0 이상의 숫자로 입력해 주세요.");
+                const input = document.getElementById(`rest-${id}`);
+                if (input) input.value = Number.isFinite(parseInt(matchedExercise.rest, 10)) ? parseInt(matchedExercise.rest, 10) : 60;
+                return;
+            }
+
+            matchedExercise.rest = rest;
+            localStorage.setItem('ex_list', JSON.stringify(exercises));
+            renderManageList();
         }
 
         function completeSetWithVolume(name, id, restTime) {
