@@ -582,8 +582,13 @@ if ('serviceWorker' in navigator) {
         let restInterval = null;
         let restEndTime = 0; // 휴식 종료 시간(절대 시간) 저장 변수
         let calendarViewDate = new Date(); // 캘린더에서 현재 보고 있는 월
+        let sessionAutoFinalizing = false; // 5시간 초과 자동 마감 중복 방지
+
+        const MAX_SESSION_MS = 5 * 60 * 60 * 1000; // 세션 1회 최대 5시간
+        const MAX_SESSION_SEC = Math.floor(MAX_SESSION_MS / 1000);
 
         const getTodayStr = () => new Date().toISOString().split('T')[0];
+        const getDateStrFromTimestamp = (timestamp) => new Date(timestamp).toISOString().split('T')[0];
 
         window.onload = function () {
             dataMigration();
@@ -612,6 +617,22 @@ if ('serviceWorker' in navigator) {
                     }
                 }
             }
+            for (let date in history) {
+                if (!history[date]) continue;
+                if (!history[date].items) {
+                    history[date].items = {};
+                    updated = true;
+                }
+                const durationNumber = parseInt(history[date].duration, 10);
+                if (!Number.isFinite(durationNumber) || durationNumber < 0) {
+                    history[date].duration = 0;
+                    updated = true;
+                } else if (history[date].duration !== durationNumber) {
+                    history[date].duration = durationNumber;
+                    updated = true;
+                }
+            }
+
             if (updated) {
                 localStorage.setItem('ex_history', JSON.stringify(history));
             }
@@ -633,31 +654,102 @@ if ('serviceWorker' in navigator) {
             if (tabId === 'tracker') updateTodaySelectOptions();
         }
 
-        function updateSessionClock(startTime) {
-            const elapsed = Date.now() - startTime;
+        function getCappedSessionElapsedMs(startTime) {
+            const rawElapsed = Math.max(Date.now() - startTime, 0);
+            return Math.min(rawElapsed, MAX_SESSION_MS);
+        }
+
+        function isSessionOverLimit(startTime) {
+            return Math.max(Date.now() - startTime, 0) >= MAX_SESSION_MS;
+        }
+
+        function updateSessionClock(startTime, allowAutoFinish = true) {
+            const elapsed = getCappedSessionElapsedMs(startTime);
             document.getElementById('sessionClock').innerText = formatTime(elapsed);
+
+            if (isSessionOverLimit(startTime)) {
+                document.getElementById('sessionStatus').innerText = "⏱️ 5시간 도달";
+                if (allowAutoFinish) finishSession(true);
+            }
         }
 
         function startSessionClock(startTime) {
             clearInterval(sessionInterval);
-            updateSessionClock(startTime);
+            updateSessionClock(startTime, false);
+
+            if (isSessionOverLimit(startTime)) {
+                finishSession(true);
+                return;
+            }
+
             sessionInterval = setInterval(() => {
-                updateSessionClock(startTime);
+                updateSessionClock(startTime, true);
             }, 1000);
         }
 
         function restoreSessionState() {
             const savedStart = localStorage.getItem('session_start_time');
             if (savedStart) {
+                const startTime = parseInt(savedStart, 10);
+                if (!Number.isFinite(startTime)) {
+                    localStorage.removeItem('session_start_time');
+                    return;
+                }
+
                 const btn = document.getElementById('btnSession');
                 const status = document.getElementById('sessionStatus');
-                status.innerText = "🔥 열운 중";
+                status.innerText = "🔥 열운 중 (최대 5시간)";
                 btn.innerText = "종료";
                 btn.classList.add('active');
 
-                const startTime = parseInt(savedStart);
                 startSessionClock(startTime);
             }
+        }
+
+        function finishSession(autoClose = false) {
+            if (sessionAutoFinalizing) return;
+            const savedStart = localStorage.getItem('session_start_time');
+            if (!savedStart) return;
+
+            const startTime = parseInt(savedStart, 10);
+            if (!Number.isFinite(startTime)) {
+                localStorage.removeItem('session_start_time');
+                return;
+            }
+
+            sessionAutoFinalizing = true;
+            clearInterval(sessionInterval);
+            stopRestTimer(false);
+
+            const now = Date.now();
+            const rawElapsedSec = Math.floor(Math.max(now - startTime, 0) / 1000);
+            const elapsedSec = Math.min(rawElapsedSec, MAX_SESSION_SEC);
+            const sessionDate = getDateStrFromTimestamp(startTime);
+
+            saveSessionToHistory(elapsedSec, sessionDate, {
+                startTime: startTime,
+                endTime: startTime + (elapsedSec * 1000),
+                wasCapped: rawElapsedSec > MAX_SESSION_SEC
+            });
+
+            localStorage.removeItem('session_start_time');
+
+            const btn = document.getElementById('btnSession');
+            const status = document.getElementById('sessionStatus');
+            status.innerText = autoClose ? "5시간 자동 마감" : "운동 마감 완료";
+            btn.innerText = "시작";
+            btn.classList.remove('active');
+            document.getElementById('sessionClock').innerText = "00:00:00";
+
+            renderCalendar();
+
+            if (autoClose) {
+                alert("운동 세션이 5시간에 도달하여 자동 마감되었습니다. 오늘 기록에는 최대 5시간으로 저장되었습니다.");
+            } else {
+                alert("오늘의 훈련 데이터가 캘린더에 동기화되었습니다.");
+            }
+
+            sessionAutoFinalizing = false;
         }
 
         function toggleSession() {
@@ -668,26 +760,14 @@ if ('serviceWorker' in navigator) {
             if (!savedStart) {
                 const startTime = Date.now();
                 localStorage.setItem('session_start_time', startTime.toString());
-                status.innerText = "🔥 열운 중";
+                status.innerText = "🔥 열운 중 (최대 5시간)";
                 btn.innerText = "종료";
                 btn.classList.add('active');
 
                 startSessionClock(startTime);
             } else {
                 if (confirm("오늘의 운동을 마감하고 기록을 저장할까요?")) {
-                    clearInterval(sessionInterval);
-                    stopRestTimer(false);
-                    const elapsedSec = Math.floor((Date.now() - parseInt(savedStart)) / 1000);
-
-                    saveSessionToHistory(elapsedSec);
-                    localStorage.removeItem('session_start_time');
-                    status.innerText = "운동 마감 완료";
-                    btn.innerText = "시작";
-                    btn.classList.remove('active');
-                    document.getElementById('sessionClock').innerText = "00:00:00";
-
-                    renderCalendar();
-                    alert("오늘의 훈련 데이터가 캘린더에 동기화되었습니다.");
+                    finishSession(false);
                 }
             }
         }
@@ -697,6 +777,17 @@ if ('serviceWorker' in navigator) {
             let m = Math.floor(s / 60);
             let h = Math.floor(m / 60);
             return `${String(h).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+        }
+
+        function formatDurationSeconds(totalSec) {
+            const safeSec = Math.max(0, Math.floor(parseInt(totalSec, 10) || 0));
+            const h = Math.floor(safeSec / 3600);
+            const m = Math.floor((safeSec % 3600) / 60);
+            const s = safeSec % 60;
+
+            if (h > 0) return `${h}시간 ${m}분`;
+            if (m > 0) return `${m}분`;
+            return `${s}초`;
         }
 
         function updateTodaySelectOptions() {
@@ -964,10 +1055,26 @@ if ('serviceWorker' in navigator) {
             }
         }
 
-        function saveSessionToHistory(durationSec) {
-            const today = getTodayStr();
-            if (!history[today]) history[today] = { duration: 0, items: {} };
-            history[today].duration += durationSec;
+        function saveSessionToHistory(durationSec, dateStr = getTodayStr(), sessionMeta = null) {
+            const safeDuration = Math.min(
+                Math.max(Math.floor(parseInt(durationSec, 10) || 0), 0),
+                MAX_SESSION_SEC
+            );
+
+            if (!history[dateStr]) history[dateStr] = { duration: 0, items: {} };
+            if (!history[dateStr].items) history[dateStr].items = {};
+
+            const previousDuration = parseInt(history[dateStr].duration, 10) || 0;
+            history[dateStr].duration = previousDuration + safeDuration;
+
+            if (!Array.isArray(history[dateStr].sessions)) history[dateStr].sessions = [];
+            history[dateStr].sessions.push({
+                startTime: new Date(sessionMeta && sessionMeta.startTime ? sessionMeta.startTime : Date.now()).toISOString(),
+                endTime: new Date(sessionMeta && sessionMeta.endTime ? sessionMeta.endTime : Date.now()).toISOString(),
+                duration: safeDuration,
+                capped: !!(sessionMeta && sessionMeta.wasCapped)
+            });
+
             localStorage.setItem('ex_history', JSON.stringify(history));
         }
 
@@ -1064,10 +1171,21 @@ if ('serviceWorker' in navigator) {
                         `;
             }
 
-            const h = Math.floor(data.duration / 3600); const m = Math.floor((data.duration % 3600) / 60);
+            const totalDurationText = formatDurationSeconds(data.duration);
+            const sessionsHtml = Array.isArray(data.sessions) && data.sessions.length > 0
+                ? `<div style="font-size:12px; color:var(--text-sub); margin: 8px 0 12px 0; line-height:1.6;">
+                    ${data.sessions.map((session, idx) => {
+                        const sessionText = formatDurationSeconds(session.duration);
+                        const cappedText = session.capped ? ' · 5시간 제한 적용' : '';
+                        return `<div>• ${idx + 1}회차: ${sessionText}${cappedText}</div>`;
+                    }).join('')}
+                   </div>`
+                : '';
+
             logBox.innerHTML = `
                         <h4 style="margin-top:0; color:var(--primary); border-bottom:1px solid var(--border); padding-bottom:8px; font-size:15px;">📅 ${dateStr} Workout Log</h4>
-                        <p style="font-size:13px; margin: 10px 0;">⏱️ <strong>총 훈련 시간:</strong> ${h}시간 ${m}분</p>
+                        <p style="font-size:13px; margin: 10px 0;">⏱️ <strong>총 훈련 시간:</strong> ${totalDurationText}</p>
+                        ${sessionsHtml}
                         <ul style="line-height:1.8; padding-left: 15px; font-size:13px;">${itemsHtml || '<li>시간 기록만 존재합니다.</li>'}</ul>
 
                         <button class="btn-import-routine" onclick="importPastRoutine('${dateStr}')">
@@ -1080,7 +1198,10 @@ if ('serviceWorker' in navigator) {
     <script>
         function syncTimersAfterResume() {
             const savedStart = localStorage.getItem('session_start_time');
-            if (savedStart) updateSessionClock(parseInt(savedStart));
+            if (savedStart) {
+                const startTime = parseInt(savedStart, 10);
+                if (Number.isFinite(startTime)) updateSessionClock(startTime, true);
+            }
 
             const savedRestTimer = localStorage.getItem('rest_timer_state');
             if (savedRestTimer && !restEndTime) restoreRestTimerState();
