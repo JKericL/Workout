@@ -75,9 +75,17 @@ jobs:
           text = manifest.read_text()
           perm = '<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />'
           if perm not in text:
-              text = text.replace('<manifest ', '<manifest ', 1)
-              pos = text.find('>') + 1
-              text = text[:pos] + '\n    ' + perm + text[pos:]
+              # AndroidManifest.xml starts with an XML declaration. Insert the
+              # permission inside <manifest ...>, not after the declaration.
+              manifest_start = text.find('<manifest')
+              manifest_open_end = text.find('>', manifest_start)
+              if manifest_start == -1 or manifest_open_end == -1:
+                  raise RuntimeError('Could not find opening <manifest> tag')
+              text = (
+                  text[:manifest_open_end + 1]
+                  + '\n    ' + perm
+                  + text[manifest_open_end + 1:]
+              )
           manifest.write_text(text)
 
           gradle = Path('android/app/build.gradle')
@@ -87,6 +95,16 @@ jobs:
           g = re.sub(r'versionCode\s+\d+', f'versionCode {run_no}', g, count=1)
           g = re.sub(r'versionName\s+"[^"]+"', f'versionName "1.0.{run_no}"', g, count=1)
           gradle.write_text(g)
+          PY
+
+      - name: Validate Android manifest
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          path = 'android/app/src/main/AndroidManifest.xml'
+          ET.parse(path)
+          print(f'AndroidManifest.xml is valid: {path}')
           PY
 
       - name: Restore signing key from GitHub Secrets
