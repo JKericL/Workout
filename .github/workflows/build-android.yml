@@ -40,6 +40,12 @@ jobs:
         shell: bash
         run: |
           sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          BUILD_TOOLS_DIR="$SDK_ROOT/build-tools/36.0.0"
+          test -x "$BUILD_TOOLS_DIR/apksigner"
+          echo "$BUILD_TOOLS_DIR" >> "$GITHUB_PATH"
+          echo "BUILD_TOOLS_DIR=$BUILD_TOOLS_DIR" >> "$GITHUB_ENV"
+          "$BUILD_TOOLS_DIR/apksigner" version
 
       - name: Install npm dependencies
         run: npm install
@@ -128,6 +134,9 @@ jobs:
           KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          export PATH="$BUILD_TOOLS_DIR:$PATH"
+          echo "Using apksigner: $(command -v apksigner)"
+          apksigner version
           npx cap build android \
             --androidreleasetype APK \
             --signing-type apksigner \
