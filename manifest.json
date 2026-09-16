@@ -1,7 +1,7 @@
 {
-  "name": "Workout",
-  "short_name": "Workout",
-  "description": "운동 루틴과 기록을 관리하는 앱",
+  "name": "GlowFit Pro",
+  "short_name": "GlowFit",
+  "description": "개인 운동 루틴 및 기록 관리 앱",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

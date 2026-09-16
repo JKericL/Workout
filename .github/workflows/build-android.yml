@@ -1,0 +1,145 @@
+name: Build GlowFit Android APK
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Prepare web assets for Capacitor
+        shell: bash
+        run: |
+          rm -rf www android
+          mkdir -p www
+          cp index.html manifest.json sw.js native-notifications.js icon.png icon-512.png www/
+
+      - name: Create and sync Android project
+        shell: bash
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Generate Android launcher icons
+        shell: bash
+        run: |
+          npx @capacitor/assets generate --android \
+            --iconBackgroundColor '#121214' \
+            --iconBackgroundColorDark '#121214' \
+            --splashBackgroundColor '#121214' \
+            --splashBackgroundColorDark '#121214'
+
+      - name: Enable exact rest-timer alarms and set build version
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
+          text = manifest.read_text()
+          perm = '<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />'
+          if perm not in text:
+              text = text.replace('<manifest ', '<manifest ', 1)
+              pos = text.find('>') + 1
+              text = text[:pos] + '\n    ' + perm + text[pos:]
+          manifest.write_text(text)
+
+          gradle = Path('android/app/build.gradle')
+          g = gradle.read_text()
+          import os, re
+          run_no = int(os.environ.get('GITHUB_RUN_NUMBER', '1'))
+          g = re.sub(r'versionCode\s+\d+', f'versionCode {run_no}', g, count=1)
+          g = re.sub(r'versionName\s+"[^"]+"', f'versionName "1.0.{run_no}"', g, count=1)
+          gradle.write_text(g)
+          PY
+
+      - name: Restore signing key from GitHub Secrets
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/glowfit-release.jks"
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.configured == 'true'
+        shell: bash
+        env:
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          npx cap build android \
+            --androidreleasetype APK \
+            --keystorepath "$GITHUB_WORKSPACE/glowfit-release.jks" \
+            --keystorepass "$KS_PASS" \
+            --keystorealias "$KS_ALIAS" \
+            --keystorealiaspass "$KEY_PASS"
+          APK_PATH=$(find android/app/build/outputs -type f -name '*.apk' | grep -E 'release|signed' | head -n 1)
+          test -n "$APK_PATH"
+          cp "$APK_PATH" "$GITHUB_WORKSPACE/GlowFit-Pro.apk"
+
+      - name: Build debug APK (signing secrets not configured yet)
+        if: steps.signing.outputs.configured != 'true'
+        shell: bash
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/GlowFit-Pro-debug.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GlowFit-Pro-APK
+          path: |
+            GlowFit-Pro.apk
+            GlowFit-Pro-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish APK to GitHub Release when a v* tag is pushed
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILE="GlowFit-Pro.apk"
+          if [ ! -f "$FILE" ]; then FILE="GlowFit-Pro-debug.apk"; fi
+          gh release create "$GITHUB_REF_NAME" "$FILE" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes

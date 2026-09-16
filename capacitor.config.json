@@ -1,0 +1,16 @@
+{
+  "appId": "com.glowfit.workout",
+  "appName": "GlowFit Pro",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "iconColor": "#00e5ff"
+    }
+  }
+}
