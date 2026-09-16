@@ -30,6 +30,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          # setup-android v4 defaults to installing the obsolete 'tools' package.
+          # Skip default packages and install only what GlowFit needs below.
+          packages: ''
+          log-accepted-android-sdk-licenses: 'false'
 
       - name: Install Android SDK 36
         shell: bash
@@ -107,6 +112,7 @@ jobs:
         run: |
           npx cap build android \
             --androidreleasetype APK \
+            --signing-type apksigner \
             --keystorepath "$GITHUB_WORKSPACE/glowfit-release.jks" \
             --keystorepass "$KS_PASS" \
             --keystorealias "$KS_ALIAS" \
